@@ -16,10 +16,12 @@ jobs:
       - name: Rebuild project ZIP
         run: |
           cat QIRI_ANDROID_API36_PART1.bin QIRI_ANDROID_API36_PART2.bin > qiri_android_api36.zip
-          mkdir project
+          mkdir -p project
           unzip -q qiri_android_api36.zip -d project
+
           test -f project/settings.gradle
           test -f project/app/build.gradle
+          test -f project/app/src/main/assets/www/index.html
           test -f project/app/src/main/assets/www/pages/118.webp
 
       - name: Use candle as app icon
@@ -35,32 +37,26 @@ jobs:
               android:viewportWidth="108"
               android:viewportHeight="108">
 
-              <!-- Candle body -->
               <path
                   android:fillColor="#E7C47A"
                   android:pathData="M42,48 L66,48 L66,86 L42,86 Z"/>
 
-              <!-- Candle highlight -->
               <path
                   android:fillColor="#F7E6B3"
                   android:pathData="M46,52 L51,52 L51,82 L46,82 Z"/>
 
-              <!-- Wick -->
               <path
                   android:fillColor="#3A2A1F"
                   android:pathData="M52,40 L56,40 L56,49 L52,49 Z"/>
 
-              <!-- Flame -->
               <path
                   android:fillColor="#FFD66B"
                   android:pathData="M54,16 C44,27 46,38 54,43 C62,38 64,27 54,16 Z"/>
 
-              <!-- Inner flame -->
               <path
                   android:fillColor="#FFF4C6"
                   android:pathData="M54,23 C49,30 50,35 54,38 C58,35 59,30 54,23 Z"/>
 
-              <!-- Small wax drip -->
               <path
                   android:fillColor="#F7E6B3"
                   android:pathData="M58,48 C58,55 62,57 62,62 C62,65 60,67 58,67 Z"/>
@@ -88,13 +84,28 @@ jobs:
           EOF
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Install Android API 36
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: |
+          SDKMANAGER="$(find /usr/local/lib/android/sdk/cmdline-tools -type f -name sdkmanager | sort -V | tail -n 1)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager was not found"
+            exit 1
+          fi
+
+          echo "Using: $SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
