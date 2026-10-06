@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK V3
 
 on:
   workflow_dispatch:
@@ -8,117 +8,26 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Rebuild project ZIP
+      - name: Rebuild project
         run: |
-          cat QIRI_ANDROID_API36_PART1.bin QIRI_ANDROID_API36_PART2.bin > qiri_android_api36.zip
-          mkdir -p project
-          unzip -q qiri_android_api36.zip -d project
+          cat QIRI_ANDROID_API36_PART1.bin QIRI_ANDROID_API36_PART2.bin > qiri.zip
+          rm -rf project && mkdir project
+          unzip -q qiri.zip -d project
+          test -f project/app/src/main/assets/www/app.js
 
-          test -f project/settings.gradle
-          test -f project/app/build.gradle
-          test -f project/app/src/main/assets/www/index.html
-          test -f project/app/src/main/assets/www/pages/118.webp
-
-      - name: Use candle as app icon
+      - name: Fullscreen book UI
         run: |
-          mkdir -p project/app/src/main/res/drawable
-          mkdir -p project/app/src/main/res/mipmap-anydpi-v26
-          mkdir -p project/app/src/main/res/values
+          cat >> project/app/src/main/assets/www/app.css <<'CSS'
+          header,footer{display:none!important}main{position:fixed!important;inset:0!important}#bookView{inset:0!important;padding:0!important}#stage{width:100vw;height:100dvh;gap:2px}.pageimg{max-width:100vw!important;max-height:100dvh!important;object-fit:contain!important}.landscape .pageimg{max-width:50vw!important}#qM,#qL,#qR,#qP{position:fixed;z-index:90;background:#17100cdd;color:#fff9ed;border:1px solid #e3bf7c88}#qM{right:10px;top:10px;width:42px;height:42px;border-radius:50%}#qL,#qR{top:50%;transform:translateY(-50%);width:38px;height:54px;font-size:26px;background:#17100c88}#qL{left:6px}#qR{right:6px}#qP{left:50%;bottom:8px;transform:translateX(-50%);padding:5px 10px;border-radius:20px}#qB{position:fixed;inset:0;z-index:94;background:#0008;display:none}#qD{position:fixed;z-index:95;top:0;right:0;width:min(88vw,360px);height:100dvh;overflow:auto;background:#17100cf7;padding:12px;transform:translateX(102%);transition:.2s}body.qOpen #qB{display:block}body.qOpen #qD{transform:none}#qS{display:grid;grid-template-columns:1fr 1fr;gap:6px}#qPages{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}#qPages button,#qS button{padding:8px 5px}#qPages .on{background:#e3bf7c;color:#17100c}#qD h3{color:#e3bf7c;font-size:13px}body.qReader #bookView{display:none!important}body.qReader #readerView{display:block!important}body.qReader #readerControls{display:flex!important}
+          CSS
 
-          cat > project/app/src/main/res/drawable/ic_launcher_foreground.xml <<'EOF'
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="108dp"
-              android:height="108dp"
-              android:viewportWidth="108"
-              android:viewportHeight="108">
-
-              <path
-                  android:fillColor="#E7C47A"
-                  android:pathData="M42,48 L66,48 L66,86 L42,86 Z"/>
-
-              <path
-                  android:fillColor="#F7E6B3"
-                  android:pathData="M46,52 L51,52 L51,82 L46,82 Z"/>
-
-              <path
-                  android:fillColor="#3A2A1F"
-                  android:pathData="M52,40 L56,40 L56,49 L52,49 Z"/>
-
-              <path
-                  android:fillColor="#FFD66B"
-                  android:pathData="M54,16 C44,27 46,38 54,43 C62,38 64,27 54,16 Z"/>
-
-              <path
-                  android:fillColor="#FFF4C6"
-                  android:pathData="M54,23 C49,30 50,35 54,38 C58,35 59,30 54,23 Z"/>
-
-              <path
-                  android:fillColor="#F7E6B3"
-                  android:pathData="M58,48 C58,55 62,57 62,62 C62,65 60,67 58,67 Z"/>
-          </vector>
-          EOF
-
-          cat > project/app/src/main/res/values/icon_colors.xml <<'EOF'
-          <resources>
-              <color name="qiri_icon_bg">#17100C</color>
-          </resources>
-          EOF
-
-          cat > project/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@color/qiri_icon_bg"/>
-              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
-          </adaptive-icon>
-          EOF
-
-          cat > project/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml <<'EOF'
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@color/qiri_icon_bg"/>
-              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
-          </adaptive-icon>
-          EOF
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Install Android API 36
-        run: |
-          SDKMANAGER="$(find /usr/local/lib/android/sdk/cmdline-tools -type f -name sdkmanager | sort -V | tail -n 1)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager was not found"
-            exit 1
-          fi
-
-          echo "Using: $SDKMANAGER"
-
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-
-          "$SDKMANAGER" \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.6.0'
-
-      - name: Build APK
-        working-directory: project
-        run: gradle assembleDebug --no-daemon
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Histori-Legjenda-Nen-Qiri-APK
-          path: project/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          cat >> project/app/src/main/assets/www/app.js <<'JS'
+          let qBusy=false;const Q=[['Kopertina',1],['Hyrja',2],['Përmbajtja',3],['Historitë',4],['Emigracioni',29],['Legjendat',33],['Jeta e përditshme',73],['Dy urat',104],['Hartat',106],['Burimet',114],['Mbyllja',116]];
+          function qLeft(){return isLandscape()&&page>1?(page%2?page-1:page):page}function qLab(){let l=qLeft();return isLandscape()&&page>1&&l<PAGE_COUNT?`${l}–${l+1} / ${PAGE_COUNT}`:`${page} / ${PAGE_COUNT}`}
+          renderBook=function(){page=Math.max(1,Math.min(PAGE_COUNT,page));localStorage.qiriPage=page;$('counter').textContent=qLab();$('pageRange').value=page;stage.innerHTML='';stage.className=isLandscape()?'landscape':'';const m=n=>{let i=new Image();i.className='pageimg';i.draggable=false;i.src=`pages/${String(n).padStart(3,'0')}.webp`;return i};if(isLandscape()&&page>1){let l=qLeft();stage.append(m(l));if(l<PAGE_COUNT)stage.append(m(l+1))}else stage.append(m(page));applyTransform();qUpd()};
+          go=function(d){if(qBusy)return;let n=Math.max(1,Math.min(PAGE_COUNT,page+d));if(n===page)return;qBusy=true;stage.animate([{transform:'perspective(1200px) rotateY(0)'},{transform:`perspective(1200px) rotateY(${d>0?-12:12}deg)`,filter:'brightness(.65)'}],{duration:140}).onfinish=()=>{page=n;resetZoom();renderBook();stage.animate([{opacity:.55,transform:`translateX(${d>0?25:-25}px)`},{opacity:1,transform:'none'}],{duration:180
