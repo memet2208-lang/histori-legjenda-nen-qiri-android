@@ -1,0 +1,73 @@
+name: "NEN QIRI V79 - Nderto APK Test"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'QIRI_V79_PAKETA_*.zip'
+
+permissions:
+  contents: read
+
+jobs:
+  apk-v79:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Merr skedaret nga GitHub
+        uses: actions/checkout@v4
+
+      - name: Rinderto V79 dhe kontrollo figurat
+        shell: bash
+        run: |
+          set -euo pipefail
+          for num in 01 02 03 04; do
+            file="QIRI_V79_PAKETA_${num}.zip"
+            test -s "$file" || { echo "::error::Mungon $file"; exit 1; }
+            unzip -oq "$file" -d .
+          done
+          test -f settings.gradle
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/assets/www/index.html
+          test -f app/src/main/java/al/kostumiim/nenqiri/MainActivity.java
+          test "$(find app/src/main/assets/www/imazhe -type f -name '*.webp' | wc -l)" -eq 173
+          sha256sum -c IMAZHE_SHA256_V79.txt
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalo Android SDK 35
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Kompilo APK
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verifiko APK
+        shell: bash
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Ruaj APK per shkarkim
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEN-QIRI-V79-APK-TEST
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
