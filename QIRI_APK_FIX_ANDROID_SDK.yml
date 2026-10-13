@@ -1,0 +1,68 @@
+name: Nderto APK – Qiri (SDK FIX)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/QIRI_APK_FIX_ANDROID_SDK.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  nderto-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Merr materialet
+        uses: actions/checkout@v4
+
+      - name: Bashko dy paketat e librit
+        shell: bash
+        run: |
+          test -s QIRI_CANDLE_APP.zip.part1
+          test -s QIRI_CANDLE_APP.zip.part2
+          cat QIRI_CANDLE_APP.zip.part1 QIRI_CANDLE_APP.zip.part2 > qiri_app.zip
+          unzip -tqq qiri_app.zip
+          mkdir -p android-project
+          unzip -q qiri_app.zip -d android-project
+          test -s android-project/app/src/main/assets/book.html
+          test -s android-project/app/src/main/assets/narration_sq.json
+          test -s android-project/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+
+      - name: Pergatit Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Instalo Android SDK pa setup-android te vjeter
+        shell: bash
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          test -n "$SDKMANAGER"
+          test -x "$SDKMANAGER"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Pergatit Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Nderto APK per testim
+        working-directory: android-project
+        shell: bash
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Ruaj APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: QIRI_APK_ME_LOGO_QIRI_TEST
+          path: android-project/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
