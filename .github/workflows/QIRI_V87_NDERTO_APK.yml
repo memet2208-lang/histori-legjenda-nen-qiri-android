@@ -1,0 +1,72 @@
+name: "Histori dhe Legjenda nen Qiri V87 - Android APK"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/QIRI_V87_NDERTO_APK.yml'
+      - 'QIRI_V87_ANDROID_ZERA_ONLINE_PROJEKTI.zip'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Shkarko projektin
+        uses: actions/checkout@v4
+
+      - name: Kontrollo dhe pergatit projektin Android
+        shell: bash
+        run: |
+          test -s QIRI_V87_ANDROID_ZERA_ONLINE_PROJEKTI.zip
+
+          unzip -t QIRI_V87_ANDROID_ZERA_ONLINE_PROJEKTI.zip
+
+          mkdir -p v87
+
+          unzip -q QIRI_V87_ANDROID_ZERA_ONLINE_PROJEKTI.zip -d v87
+
+          test -f v87/app/build.gradle
+
+          test -f v87/app/src/main/assets/index.html
+
+          test -f v87/app/src/main/assets/book_texts.json
+
+          test -f v87/app/src/main/java/al/qiri/reader/NarrationService.java
+
+      - name: Instalo Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Instalo Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Pergatit Android 35
+        shell: bash
+        run: |
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Instalo Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Nderto aplikacionin APK
+        working-directory: v87
+        run: |
+          gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Ruaj APK per shkarkim
+        uses: actions/upload-artifact@v4
+        with:
+          name: QIRI-V87-Android-APK
+          path: v87/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
