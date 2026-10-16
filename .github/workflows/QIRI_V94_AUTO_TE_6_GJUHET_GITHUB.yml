@@ -1,0 +1,171 @@
+name: QIRI V94 AUTO - 219 dyfaqeshe x 6 gjuhe
+
+# ONE-TIME SETUP: upload this file under .github/workflows/ on main.
+# Then use Run workflow once; afterward the scheduled runs continue automatically.
+# This modifies only the generated MP3, public catalog, and progress JSON.
+on:
+  workflow_dispatch:
+    inputs:
+      max_clips:
+        description: 'Maksimumi i regjistrimeve per ekzekutim (1-120); 90 eshte prove e shpejte'
+        required: true
+        default: '90'
+        type: string
+  schedule:
+    # 3 runs/day, far below continuous API polling; a 429 stops the batch.
+    - cron: '43 10,16,22 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qiri-audio-public-main
+  cancel-in-progress: false
+
+jobs:
+  qiri-audio-auto:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      QIRI_BASE_URL: https://drop-8da005c7-da3.memet2208.workers.dev/audio
+      MAX_CLIPS: ${{ inputs.max_clips || '90' }}
+    steps:
+      - name: Merr projektin ekzistues (nuk fillon nga zero)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Rimer V92 dhe ruaj te gjitha regjistrimet e meparshme
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GEMINI_API_KEY" || { echo 'GEMINI_API_KEY secret nuk ekziston'; exit 1; }
+          test -s QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip
+          unzip -tq QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip
+          mkdir -p work-v92
+          unzip -q QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip -d work-v92
+          test -s work-v92/tools/generate_audio.py
+          test -s work-v92/app/src/main/assets/book_texts.json
+          mkdir -p work-v92/public_site/audio public_site/audio
+          if test -d public_site/audio; then
+            cp -an public_site/audio/. work-v92/public_site/audio/
+          fi
+          if test -s QIRI_PUBLIC_AUDIO_CATALOG.json; then
+            cp QIRI_PUBLIC_AUDIO_CATALOG.json work-v92/QIRI_PUBLIC_AUDIO_CATALOG.json
+          fi
+          case "$MAX_CLIPS" in *[!0-9]*|'') echo 'max_clips numer i pavlefshem'; exit 1;; esac
+          if (( MAX_CLIPS < 1 || MAX_CLIPS > 120 )); then
+            echo 'max_clips duhet te jete 1 deri 120'; exit 1
+          fi
+
+      - name: Kontrollo nese jane perfunduar te gjitha 1314 dyfaqeshet
+        id: check
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          r=pathlib.Path('work-v92')
+          book=json.loads((r/'app/src/main/assets/book_texts.json').read_text(encoding='utf8'))['spreads']
+          assert len(book)==219,'Numri i dyfaqesheve nuk eshte 219; ndalo.'
+          cat=json.loads((r/'QIRI_PUBLIC_AUDIO_CATALOG.json').read_text(encoding='utf8'))
+          complete=0
+          for lang in ('sq','it','en','de','fr','es'):
+              for i,p in enumerate(book,1):
+                  t='\n'.join((p[lang].get('left') or '',p[lang].get('right') or ''))
+                  d=hashlib.sha256(t.encode('utf8')).hexdigest()
+                  files=cat.get('tracks',{}).get(lang,{}).get(str(i),[])
+                  if files and d==cat.get('source_hash',{}).get(lang,{}).get(str(i)) and all((r/'public_site/audio'/f).is_file() for f in files):
+                      complete+=1
+          done=(complete==len(book)*6)
+          print('Dyfaqeshe te plota:',complete,'nga',len(book)*6,'DONE=',done)
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write(f'QIRI_DONE={int(done)}\n')
+          PY
+
+      - name: Python 3.11
+        if: env.QIRI_DONE != '1'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Mjetet e nevojshme per MP3
+        if: env.QIRI_DONE != '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q 'google-genai>=2.25.0'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          command -v ffmpeg
+
+      - name: Gjenero automatikisht 6 gjuhet; ndalo ne kuoten e lejuar
+        if: env.QIRI_DONE != '1'
+        shell: bash
+        working-directory: work-v92
+        run: |
+          set -euo pipefail
+          total_new=0
+          for language in sq it en de fr es; do
+            remaining=$(( MAX_CLIPS - total_new ))
+            if (( remaining <= 0 )); then break; fi
+            before="$(find public_site/audio -type f -name '*.mp3' | wc -l)"
+            echo ">>> Gjuha: $language; buxheti i thirrjeve te mbetura: $remaining"
+            set +e
+            python tools/generate_audio.py \
+              --lang "$language" --start 1 --end 219 \
+              --max-generated "$remaining" --pause 12 \
+              --base-url "$QIRI_BASE_URL"
+            rc=$?
+            set -e
+            after="$(find public_site/audio -type f -name '*.mp3' | wc -l)"
+            added=$(( after - before ))
+            if (( added < 0 )); then added=0; fi
+            total_new=$(( total_new + added ))
+            echo "Gjeneruar ne $language: $added; gjithsej ne kete ekzekutim: $total_new"
+            if (( rc != 0 )); then
+              echo "Gemini ndaloi (p.sh. 429 kuote). MP3 e suksesshme do te ruhen. Provimi tjeter vjen automatikisht."
+              break
+            fi
+          done
+          echo "QIRI_NEW_CLIPS=$total_new" >> "$GITHUB_ENV"
+
+      - name: Ruaj automatikisht progresin, pa ndryshuar librin
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! test -s work-v92/QIRI_PUBLIC_AUDIO_CATALOG.json; then exit 1; fi
+          cp -a work-v92/public_site/audio/. public_site/audio/
+          cp work-v92/QIRI_PUBLIC_AUDIO_CATALOG.json QIRI_PUBLIC_AUDIO_CATALOG.json
+          python3 - <<'PY'
+          import hashlib,json,pathlib
+          r=pathlib.Path('work-v92')
+          book=json.loads((r/'app/src/main/assets/book_texts.json').read_text(encoding='utf8'))['spreads']
+          cat=json.loads(pathlib.Path('QIRI_PUBLIC_AUDIO_CATALOG.json').read_text(encoding='utf8'))
+          cat['base_url']='https://drop-8da005c7-da3.memet2208.workers.dev/audio'
+          pathlib.Path('QIRI_PUBLIC_AUDIO_CATALOG.json').write_text(json.dumps(cat,ensure_ascii=False,indent=2)+'\n',encoding='utf8')
+          counts={}
+          for lang in ('sq','it','en','de','fr','es'):
+            done=0
+            for i,p in enumerate(book,1):
+              t='\n'.join((p[lang].get('left') or '',p[lang].get('right') or ''))
+              digest=hashlib.sha256(t.encode('utf8')).hexdigest()
+              files=cat.get('tracks',{}).get(lang,{}).get(str(i),[])
+              if files and cat.get('source_hash',{}).get(lang,{}).get(str(i))==digest and all((pathlib.Path('public_site/audio')/f).is_file() for f in files):
+                done+=1
+            counts[lang]=done
+          progress={'version':1,'total_spreads':len(book)*6,'completed_spreads':sum(counts.values()),'by_language':counts,'stored_mp3_files':len(list(pathlib.Path('public_site/audio').rglob('*.mp3'))),'all_complete':sum(counts.values())==len(book)*6}
+          pathlib.Path('QIRI_AUDIO_PROGRESS.json').write_text(json.dumps(progress,ensure_ascii=False,indent=2)+'\n',encoding='utf8')
+          print('Audio progress:',json.dumps(progress,ensure_ascii=False))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add QIRI_PUBLIC_AUDIO_CATALOG.json QIRI_AUDIO_PROGRESS.json public_site/audio
+          if ! git diff --cached --quiet; then
+            git commit -m "QIRI auto Gemini audio checkpoint [skip ci]"
+            git push
+          else
+            echo 'Asnje skedar i ri; progresi i meparshem ruhet.'
+          fi
+          cat QIRI_AUDIO_PROGRESS.json >> "$GITHUB_STEP_SUMMARY"
