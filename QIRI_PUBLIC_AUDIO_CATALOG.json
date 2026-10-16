@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "base_url": "https://drop-8da005c7-da3.memet2208.workers.dev/audio",
+  "tracks": {
+    "sq": {
+      "1": [
+        "sq/001_000.mp3",
+        "sq/001_001.mp3",
+        "sq/001_002.mp3",
+        "sq/001_003.mp3",
+        "sq/001_004.mp3",
+        "sq/001_005.mp3",
+        "sq/001_006.mp3",
+        "sq/001_007.mp3",
+        "sq/001_008.mp3",
+        "sq/001_009.mp3",
+        "sq/001_010.mp3"
+      ]
+    }
+  },
+  "source_hash": {
+    "sq": {
+      "1": "4e807f163f12e0146fddb7b4146f3ee1efe8cb76ffc49d4edb9bd1ddd38e0ed0"
+    }
+  }
+}
