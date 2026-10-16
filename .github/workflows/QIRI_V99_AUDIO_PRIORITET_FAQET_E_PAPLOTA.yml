@@ -1,0 +1,296 @@
+name: QIRI V99 - Gemini Audio PRIORITET (ploteso faqet e nisura)
+
+# V99 vazhdon nga V98. Prioritet: perfundo MP3-te e nisura ne te gjitha gjuhet,
+# pastaj nis dyfaqeshet e tjera (shqip e para). Nuk prek librin, imazhet apo APK-ne.
+# Çaktivizo V98 pasi ke ngarkuar V99, për të shmangur ekzekutimet e dyfishta.
+on:
+  workflow_dispatch:
+    inputs:
+      max_clips:
+        description: 'MP3 te rinj max per ekzekutim (1-24); fillo me 8.'
+        required: true
+        default: '8'
+        type: string
+  schedule:
+    - cron: '17 0,6,12,18 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qiri-audio-public-main
+  cancel-in-progress: false
+
+jobs:
+  qiri-audio-prioritet:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      QIRI_AUDIO_URL: https://drop-8da005c7-da3.memet2208.workers.dev/audio
+      MAX_CLIPS: ${{ inputs.max_clips || '8' }}
+    steps:
+      - name: Merr projektin ekzistues
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Kontrollo te dhenat dhe ruaj progresin e meparshem
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GEMINI_API_KEY" || { echo 'Missing existing repository secret GEMINI_API_KEY' >&2; exit 1; }
+          test -s QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip
+          unzip -tq QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip
+          case "$MAX_CLIPS" in ''|*[!0-9]*) echo 'max_clips must be a number'; exit 1;; esac
+          if (( MAX_CLIPS < 1 || MAX_CLIPS > 24 )); then echo 'Allowed max_clips: 1..24'; exit 1; fi
+          mkdir -p work-v92 public_site/audio
+          unzip -q QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip -d work-v92
+          test -s work-v92/app/src/main/assets/book_texts.json
+          test -s work-v92/tools/generate_audio.py
+          mkdir -p work-v92/public_site/audio
+          cp -an public_site/audio/. work-v92/public_site/audio/
+          if test -s QIRI_PUBLIC_AUDIO_CATALOG.json; then
+            cp QIRI_PUBLIC_AUDIO_CATALOG.json work-v92/QIRI_PUBLIC_AUDIO_CATALOG.json
+          fi
+          python3 - <<'PY'
+          import json,pathlib
+          root=pathlib.Path('work-v92')
+          data=json.loads((root/'app/src/main/assets/book_texts.json').read_text(encoding='utf-8'))['spreads']
+          assert len(data)==219
+          assert all(all(language in page for language in ('sq','it','en','de','fr','es')) for page in data)
+          print('Libri i miratuar: 219 dyfaqeshe x 6 gjuhe; nuk do te ndryshohet.')
+          PY
+
+      - name: Python dhe ffmpeg
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Pergatit mjetet ekzistuese
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q 'google-genai>=2.25.0'
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
+          command -v ffmpeg
+
+      - name: Vendos kufi 45 sekonda per cdo kerkese Gemini dhe shmang ngecjet
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('work-v92/tools/generate_audio.py')
+          s=p.read_text(encoding='utf-8')
+          needle='answer=client.interactions.create('
+          assert s.count(needle)==1, 'Source generator changed, stop for review'
+          helper = (
+              '\n'
+              'def qiri_deadline_create(client, **kwargs):\n'
+              '    import signal\n'
+              '    def expired(signum, frame):\n'
+              "        raise TimeoutError('Gemini TTS request exceeded 45 seconds')\n"
+              '    previous = signal.getsignal(signal.SIGALRM)\n'
+              '    signal.signal(signal.SIGALRM, expired)\n'
+              '    signal.setitimer(signal.ITIMER_REAL, 45.0)\n'
+              '    try:\n'
+              '        return client.interactions.create(**kwargs)\n'
+              '    finally:\n'
+              '        signal.setitimer(signal.ITIMER_REAL, 0)\n'
+              '        signal.signal(signal.SIGALRM, previous)\n'
+              '\n'
+          )
+          anchor='def main():\n'
+          assert s.count(anchor)==1
+          s=s.replace(anchor,helper+anchor,1).replace(needle,'answer=qiri_deadline_create(client,',1)
+          # Do not re-try endlessly the same stalled sentence. Limit failures per run.
+          initial='    generated=0\n'
+          assert s.count(initial)==1
+          s=s.replace(initial,initial+'    failures=0\n',1)
+          before=(
+              '            except Exception as exc:\n'
+              "                print('API unavailable or free quota reached; not publishing an incomplete spread:',exc,file=sys.stderr)\n"
+              '                return 2\n'
+          )
+          after=(
+              '            except Exception as exc:\n'
+              "                print('Gemini clip failed; no partial spread published:', exc, file=sys.stderr, flush=True)\n"
+              '                dest.unlink(missing_ok=True)\n'
+              '                failures+=1\n'
+              "                if '429' in str(exc) or 'RESOURCE_EXHAUSTED' in str(exc).upper(): return 0\n"
+              '                if failures>=2: return 0\n'
+              '                break\n'
+          )
+          assert s.count(before)==1
+          s=s.replace(before,after,1)
+          anchor="        catalog['tracks'][args.lang][str(number)]=names\n"
+          assert s.count(anchor)==1
+          s=s.replace(anchor,
+              "        if not all((SITE/'audio'/f).is_file() for f in names):\n"
+              "            print(f'Incomplete spread {args.lang}/{number}: skipping for this run; will retry later',flush=True)\n"
+              '            continue\n'
+              +anchor,1)
+          p.write_text(s,encoding='utf-8')
+          PY
+          python3 -m py_compile work-v92/tools/generate_audio.py
+
+      - name: Plotëso fillimisht dyfaqëshet me MP3 të pjesshme (deri 8 të reja)
+        id: generate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -u - <<'PY'
+          import importlib.util,json,os,pathlib,subprocess,sys,hashlib
+          root=pathlib.Path('work-v92')
+          site=root/'public_site/audio'
+          script=root/'tools/generate_audio.py'
+          spec=importlib.util.spec_from_file_location('qiri_audio_gen',script)
+          module=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          spreads=json.loads((root/'app/src/main/assets/book_texts.json').read_text(encoding='utf-8'))['spreads']
+          catalog_file=root/'QIRI_PUBLIC_AUDIO_CATALOG.json'
+          langs=('sq','it','en','de','fr','es')
+          limit=int(os.environ['MAX_CLIPS'])
+          remaining=limit
+          errors=0
+          blocked=set()
+          attempts=0
+          print(f'QIRI V99: prioritet regjistrimeve te pjesshme; buxhet {limit} MP3 te rinj.',flush=True)
+
+          def stats():
+              cat=json.loads(catalog_file.read_text(encoding='utf-8'))
+              done=[]
+              partial=[]
+              empty=[]
+              for lang_index,lang in enumerate(langs):
+                  for number,page in enumerate(spreads,1):
+                      text='\n'.join((page[lang].get('left') or '',page[lang].get('right') or ''))
+                      count=len(module.parts(text))
+                      if not count: continue
+                      prefix=f'{number:03d}_'
+                      have=sum(1 for i in range(count) if (site/lang/f'{prefix}{i:03d}.mp3').is_file())
+                      claimed=cat.get('tracks',{}).get(lang,{}).get(str(number),[])
+                      digest=hashlib.sha256(text.encode('utf-8')).hexdigest()
+                      recorded=(len(claimed)==count and cat.get('source_hash',{}).get(lang,{}).get(str(number))==digest and all((site/f).is_file() for f in claimed))
+                      key=(lang,number)
+                      if recorded:
+                          done.append(key)
+                      elif 0<have<=count:
+                          # Faqe e nisur ose MP3 te plota por te palistuara: perfundo kete se pari
+                          partial.append((count-have,number,lang_index,lang,have,count,key))
+                      else:
+                          empty.append((lang_index,number,lang,count,key))
+              # Pak klipe qe mungojne => me shume dyfaqeshe te plota sa me shpejt.
+              partial.sort()
+              empty.sort()
+              return done,partial,empty
+
+          while remaining>0 and attempts<12 and errors<2:
+              done,partials,empty=stats()
+              target=next(((lang,num,have,total) for missing,num,li,lang,have,total,key in partials if key not in blocked),None)
+              if target is None:
+                  target=next(((lang,num,0,total) for li,num,lang,total,key in empty if key not in blocked),None)
+              if target is None:
+                  print('Nuk ka kandidatë të rinj, ose Gemini është përkohësisht i padisponueshëm.')
+                  break
+              lang,num,have,total=target
+              attempts+=1
+              before=set(p.relative_to(site).as_posix() for p in site.rglob('*.mp3'))
+              old_completed=set(done)
+              print(f'Radha: {lang} dyfaqja {num}; ekzistojnë {have}/{total}; mbeten {total-have}; buxhet {remaining}',flush=True)
+              cmd=[sys.executable,'-u',str(script),'--lang',lang,
+                   '--start',str(num),'--end',str(num),
+                   '--max-generated',str(remaining),'--pause','12',
+                   '--base-url',os.environ['QIRI_AUDIO_URL']]
+              try:
+                  result=subprocess.run(cmd,check=False,timeout=14*60)
+                  rc=result.returncode
+              except subprocess.TimeoutExpired:
+                  rc=124
+                  print('Ndalesë sigurie pas 14 minutash; regjistrimet e krijuara do të ruhen.',flush=True)
+              after=set(p.relative_to(site).as_posix() for p in site.rglob('*.mp3'))
+              new=len(after-before)
+              remaining-=new
+              new_done=set(stats()[0]) - old_completed
+              print(f'Rezultati {lang}/{num}: {new} MP3 të rinj; dyfaqe të sapopërfunduara: {sorted(new_done)}; kodi={rc}',flush=True)
+              if new_done:
+                  print('QIRI READY:',', '.join(f'{l}/{n}' for l,n in sorted(new_done)),flush=True)
+              if not new and not new_done:
+                  errors+=1
+                  blocked.add((lang,num))
+                  print(f'Gemini nuk prodhoi material për {lang}/{num}; shmang riprovimin e menjëhershëm.',flush=True)
+              if rc!=0:
+                  errors+=1
+                  blocked.add((lang,num))
+              if remaining<0: raise AssertionError('U tejkalua max_clips')
+          final_done=stats()[0]
+          print(f'QIRI V99: u regjistruan {limit-remaining} MP3 të rinj, dyfaqëshe të plota gjithsej {len(final_done)}.\nCheckpoint vjen tani.',flush=True)
+          PY
+
+      - name: Ruaj checkpoint ne GitHub edhe pas gabimit Gemini
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s work-v92/QIRI_PUBLIC_AUDIO_CATALOG.json || { echo 'Audio project not initialized'; exit 1; }
+          mkdir -p public_site/audio
+          cp -a work-v92/public_site/audio/. public_site/audio/
+          cp work-v92/QIRI_PUBLIC_AUDIO_CATALOG.json QIRI_PUBLIC_AUDIO_CATALOG.json
+          python3 - <<'PY'
+          import hashlib,json,pathlib,os
+          root=pathlib.Path('.')
+          book=json.loads((root/'work-v92/app/src/main/assets/book_texts.json').read_text(encoding='utf-8'))['spreads']
+          catalog=json.loads((root/'QIRI_PUBLIC_AUDIO_CATALOG.json').read_text(encoding='utf-8'))
+          catalog['base_url']=os.environ['QIRI_AUDIO_URL']
+          (root/'QIRI_PUBLIC_AUDIO_CATALOG.json').write_text(json.dumps(catalog,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          done={}
+          for lang in ('sq','it','en','de','fr','es'):
+              count=0
+              for idx,p in enumerate(book,1):
+                  t='\n'.join((p[lang].get('left') or '',p[lang].get('right') or ''))
+                  digest=hashlib.sha256(t.encode('utf-8')).hexdigest()
+                  clips=catalog.get('tracks',{}).get(lang,{}).get(str(idx),[])
+                  if clips and catalog.get('source_hash',{}).get(lang,{}).get(str(idx))==digest and all((root/'public_site/audio'/f).is_file() for f in clips):count+=1
+              done[lang]=count
+          progress={'version':2,'total_spreads':len(book)*6,'completed_spreads':sum(done.values()),
+                    'by_language':done,'stored_mp3_files':len(list((root/'public_site/audio').rglob('*.mp3'))),
+                    'all_complete':sum(done.values())==len(book)*6}
+          (root/'QIRI_AUDIO_PROGRESS.json').write_text(json.dumps(progress,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print('Checkpoint progress:',json.dumps(progress,ensure_ascii=False))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('## QIRI V99 audio progress\n```json\n'+json.dumps(progress,indent=2)+'\n```\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add QIRI_PUBLIC_AUDIO_CATALOG.json QIRI_AUDIO_PROGRESS.json public_site/audio
+          if git diff --cached --quiet; then
+            echo 'Nothing new to publish.'
+            exit 0
+          fi
+          git commit -m "QIRI V99 audio checkpoint [skip ci]"
+          # V94 previously failed because users pushed other files during a long run.
+          # Rebase first, NEVER force push or overwrite another commit.
+          published=0
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main || { git rebase --abort || true; echo 'Git merge conflict; files remain in this job artifact'; exit 1; }
+            if git push origin HEAD:main; then published=1; break; fi
+            sleep $((attempt*3))
+          done
+          test "$published" -eq 1 || { echo 'Push failed after 3 retries'; exit 1; }
+
+      - name: Rezervim i progresit audio
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: QIRI-V99-AUDIO-CHECKPOINT
+          path: |
+            public_site/audio/
+            QIRI_PUBLIC_AUDIO_CATALOG.json
+            QIRI_AUDIO_PROGRESS.json
+          if-no-files-found: warn
+          retention-days: 14
