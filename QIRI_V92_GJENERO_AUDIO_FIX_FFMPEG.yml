@@ -1,0 +1,129 @@
+name: QIRI V92 FIX - Zerat Gemini (ffmpeg)
+
+on:
+  workflow_dispatch:
+    inputs:
+      gjuha:
+        description: 'Gjuha: sq, it, en, de, fr, es'
+        required: true
+        default: 'sq'
+        type: string
+      nga_dyfaqja:
+        description: 'Dyfaqja e pare (1-219)'
+        required: true
+        default: '1'
+        type: string
+      deri_te_dyfaqja:
+        description: 'Dyfaqja e fundit (1-219)'
+        required: true
+        default: '1'
+        type: string
+      maksimumi_klipave:
+        description: 'Maksimumi i thirrjeve Gemini ne kete ekzekutim'
+        required: true
+        default: '8'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qiri-audio-public-main
+  cancel-in-progress: false
+
+jobs:
+  gjenero-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      QIRI_LANG: ${{ inputs.gjuha }}
+      QIRI_START: ${{ inputs.nga_dyfaqja }}
+      QIRI_END: ${{ inputs.deri_te_dyfaqja }}
+      QIRI_MAX: ${{ inputs.maksimumi_klipave }}
+      # Adresa e provuar nga perdoruesi; audio files do te publikohen ne /audio/...
+      QIRI_AUDIO_URL: https://drop-8da005c7-da3.memet2208.workers.dev/audio
+    steps:
+      - name: Merr repozitorin
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Kontrollo parametrat dhe projektin
+        shell: bash
+        run: |
+          set -eu
+          test -n "$GEMINI_API_KEY" || { echo 'Mungon Actions secret GEMINI_API_KEY'; exit 1; }
+          test -s QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip || { echo 'Ngarko ZIP V92 ne rrenjen e repos'; exit 1; }
+          case "$QIRI_LANG" in sq|it|en|de|fr|es) ;; *) echo 'Gjuhe e pavlefshme'; exit 1;; esac
+          for x in "$QIRI_START" "$QIRI_END" "$QIRI_MAX"; do
+            [[ "$x" =~ ^[0-9]{1,3}$ ]] || { echo 'Numer i pavlefshem'; exit 1; }
+          done
+          ((10#$QIRI_START>=1 && 10#$QIRI_START<=10#$QIRI_END && 10#$QIRI_END<=219 && 10#$QIRI_MAX>=1 && 10#$QIRI_MAX<=40))
+          unzip -tq QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip
+          mkdir -p work-v92
+          unzip -q QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip -d work-v92
+          mkdir -p work-v92/public_site/audio
+          if test -d public_site/audio; then cp -a public_site/audio/. work-v92/public_site/audio/; fi
+          if test -s QIRI_PUBLIC_AUDIO_CATALOG.json; then cp QIRI_PUBLIC_AUDIO_CATALOG.json work-v92/QIRI_PUBLIC_AUDIO_CATALOG.json; fi
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Mjetet per Gemini dhe MP3
+        run: |
+          python -m pip install -U google-genai
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+      - name: Gjenero segmente (ruan edhe progresin e pjesshem)
+        shell: bash
+        run: |
+          set +e
+          python work-v92/tools/generate_audio.py \
+            --lang "$QIRI_LANG" \
+            --start "$QIRI_START" \
+            --end "$QIRI_END" \
+            --max-generated "$QIRI_MAX" \
+            --pause 12 \
+            --base-url "$QIRI_AUDIO_URL"
+          code=$?
+          echo "QIRI_GENERATE_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+      - name: Ruaj progresin ne repo
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p public_site/audio
+          if test -d work-v92/public_site/audio; then cp -a work-v92/public_site/audio/. public_site/audio/; fi
+          cp work-v92/QIRI_PUBLIC_AUDIO_CATALOG.json QIRI_PUBLIC_AUDIO_CATALOG.json
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          p=Path('QIRI_PUBLIC_AUDIO_CATALOG.json')
+          d=json.loads(p.read_text(encoding='utf-8'))
+          d['base_url']=os.environ['QIRI_AUDIO_URL']
+          p.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print('Complete tracks:',sum(len(x) for x in d.get('tracks',{}).values()))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add QIRI_PUBLIC_AUDIO_CATALOG.json public_site/audio
+          if ! git diff --cached --quiet; then
+            git commit -m "QIRI public audio $QIRI_LANG $QIRI_START-$QIRI_END [skip ci]"
+            git push
+          fi
+      - name: Ruaj kopjen e audios se prodhuar
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: QIRI-AUDIO-PROGRES
+          path: |
+            public_site/audio/
+            QIRI_PUBLIC_AUDIO_CATALOG.json
+          retention-days: 30
+          if-no-files-found: warn
+      - name: Raporti final
+        if: env.QIRI_GENERATE_EXIT != '0'
+        run: |
+          echo 'Gjenerimi u ndal (mundesi: kuota falas, API, gabim TTS). Segmentet e suksesshme u ruajten ne repo.'
+          exit 1
