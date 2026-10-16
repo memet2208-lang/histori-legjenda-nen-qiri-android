@@ -1,0 +1,65 @@
+name: QIRI V95 - Link direkt per shkarkim APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/QIRI_V95_PUBLIKO_APK_DIREKT.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publiko-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Kontrollo repozitorin
+        uses: actions/checkout@v4
+
+      # Reuse the existing SUCCESS V95 APK: no compilation, no book edits.
+      - name: Shkarko APK V95 nga ekzekutimi i suksesshem
+        uses: actions/download-artifact@v4
+        with:
+          name: QIRI-V95-ANDROID-AUDIO-AUTO-APK
+          run-id: 38880719444
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: apk-artifact
+
+      - name: Pergatit skedarin e shkarkimit direkt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' apks < <(find apk-artifact -type f -iname '*.apk' -print0)
+          if [ "${#apks[@]}" -ne 1 ]; then
+            echo "U priten saktesisht 1 APK; u gjeten ${#apks[@]}" >&2
+            find apk-artifact -type f -maxdepth 4 -print
+            exit 1
+          fi
+          test -s "${apks[0]}"
+          mkdir -p publish
+          cp "${apks[0]}" publish/Histori_dhe_Legjenda_nen_Qiri_V95.apk
+          sha256sum publish/Histori_dhe_Legjenda_nen_Qiri_V95.apk
+
+      - name: Publiko APK si GitHub Release (lidhje publike direkte)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag='v95.0'
+          asset='publish/Histori_dhe_Legjenda_nen_Qiri_V95.apk'
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+          else
+            gh release create "$tag" "$asset" \
+              --title 'Histori dhe Legjenda nen Qiri - Android V95' \
+              --notes 'Version testimi Android V95, lexues me 219 dyfaqeshe dhe 6 gjuhe. Audio Gemini merret online kur eshte gati; ndryshe perdoret TTS i telefonit.' \
+              --target "$GITHUB_SHA" \
+              --latest
+          fi
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/Histori_dhe_Legjenda_nen_Qiri_V95.apk"
+          echo "Shkarko direkt APK V95: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "LINK DIREKT: $url"
