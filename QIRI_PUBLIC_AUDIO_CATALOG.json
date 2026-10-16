@@ -15,12 +15,18 @@
         "sq/001_008.mp3",
         "sq/001_009.mp3",
         "sq/001_010.mp3"
+      ],
+      "2": [
+        "sq/002_000.mp3",
+        "sq/002_001.mp3",
+        "sq/002_002.mp3"
       ]
     }
   },
   "source_hash": {
     "sq": {
-      "1": "4e807f163f12e0146fddb7b4146f3ee1efe8cb76ffc49d4edb9bd1ddd38e0ed0"
+      "1": "4e807f163f12e0146fddb7b4146f3ee1efe8cb76ffc49d4edb9bd1ddd38e0ed0",
+      "2": "06c44f072889ebfd1d937baadaab97cf74f038acb0738b6c14a35628d86be30a"
     }
   }
 }

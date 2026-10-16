@@ -1,15 +1,15 @@
 {
   "version": 2,
   "total_spreads": 1314,
-  "completed_spreads": 1,
+  "completed_spreads": 2,
   "by_language": {
-    "sq": 1,
+    "sq": 2,
     "it": 0,
     "en": 0,
     "de": 0,
     "fr": 0,
     "es": 0
   },
-  "stored_mp3_files": 25,
+  "stored_mp3_files": 28,
   "all_complete": false
 }
