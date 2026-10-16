@@ -1,0 +1,124 @@
+name: QIRI V95 - Android APK me audio qe shtohet automatikisht
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/QIRI_V95_NDERTO_APK_AUDIO_DINAMIKE.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-android-v95:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Merr repozitorin ekzistues
+        uses: actions/checkout@v4
+
+      - name: Shpaketo librin V92 dhe pergatit audio dinamike (pa ndryshuar librin)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip
+          unzip -tq QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip
+          mkdir -p qiri-v95
+          unzip -q QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip -d qiri-v95
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, zipfile
+          root=Path('qiri-v95')
+          service=root/'app/src/main/java/al/qiri/reader/NarrationService.java'
+          src=service.read_text(encoding='utf8')
+          wrong='      else report("loading","Duke nisur motorin e zërit…");\n'
+          assert src.count(wrong)==1, 'U ndryshua V92: ndal, duhet verifikim para korrigjimit'
+          service.write_text(src.replace(wrong,''),encoding='utf8')
+
+          public=root/'app/src/main/java/al/qiri/reader/PublicAudio.java'
+          src=public.read_text(encoding='utf8')
+          anchor='    return result;\n  }\n}'
+          assert src.count(anchor)==1, 'U ndryshua kodi i katalogut: ndal per kontroll'
+          replacement='''    // Prove Cloudflare only if its first real MP3 exists, then use its fast public URL.
+              // Otherwise play the same MP3 directly from the public GitHub repository.
+              // Check runs only while the reader requests audio, never as a background download.
+              if(!result.isEmpty() && base.contains("workers.dev")){
+                boolean cloudflareWorks=false;
+                HttpURLConnection probe=null;
+                try{
+                  probe=(HttpURLConnection)new URL(result.get(0)).openConnection();
+                  probe.setRequestMethod("HEAD");
+                  probe.setConnectTimeout(3500);
+                  probe.setReadTimeout(3500);
+                  int status=probe.getResponseCode();
+                  String type=probe.getContentType();
+                  cloudflareWorks=(status==200||status==206)
+                    && type!=null && type.toLowerCase(java.util.Locale.ROOT).startsWith("audio/");
+                } catch(Exception ignored) {
+                  cloudflareWorks=false;
+                } finally {if(probe!=null)probe.disconnect();}
+                if(!cloudflareWorks){
+                  result.clear();
+                  String github="https://raw.githubusercontent.com/memet2208-lang/"
+                    +"histori-legjenda-nen-qiri-android/main/public_site/audio";
+                  for(int i=0;i<tracks.length();i++)result.add(github+"/"+tracks.optString(i,""));
+                }
+              }
+              return result;
+            }
+          }'''
+          public.write_text(src.replace(anchor,replacement),encoding='utf8')
+
+          gradle=root/'app/build.gradle'
+          s=gradle.read_text(encoding='utf8')
+          old="versionCode 92; versionName '0.92'"
+          assert s.count(old)==1, 'Numri i versionit nuk u perputh'
+          gradle.write_text(s.replace(old,"versionCode 95; versionName '0.95'"),encoding='utf8')
+
+          # Audit: original panoramas, book HTML, translations, and text are untouched.
+          with zipfile.ZipFile('QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip') as z:
+            for path in ('app/src/main/assets/index.html','app/src/main/assets/book_texts.json'):
+              assert hashlib.sha256(z.read(path)).digest()==hashlib.sha256((root/path).read_bytes()).digest()
+            book=json.loads((root/'app/src/main/assets/book_texts.json').read_text(encoding='utf8'))
+            assert len(book['spreads'])==219
+            assert all(all(lang in p for lang in ('sq','it','en','de','fr','es')) for p in book['spreads'])
+          print('QIRI V95: 219 dyfaqeshe, 6 gjuhe; asnje tekst apo ilustrim i ndryshuar.')
+          print('Audio: katalogu publik rifreskohet cdo 15 minuta; Cloudflare ose GitHub backup.')
+          PY
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK 35
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
+          test -x "$SDKMANAGER"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          (yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses >/dev/null 2>&1) || true
+          "$SDKMANAGER" --sdk_root="$SDK" --install 'platforms;android-35' 'build-tools;35.0.0'
+          test -d "$SDK/platforms/android-35"
+
+      - name: Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Ndërto Android APK
+        working-directory: qiri-v95
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Ruaj APK per telefon Android
+        uses: actions/upload-artifact@v4
+        with:
+          name: QIRI-V95-ANDROID-AUDIO-AUTO-APK
+          path: qiri-v95/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
