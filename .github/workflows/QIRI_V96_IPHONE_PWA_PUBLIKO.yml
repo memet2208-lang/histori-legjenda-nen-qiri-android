@@ -1,0 +1,280 @@
+name: QIRI V96 - iPhone PWA (219 faqe, 6 gjuhe)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/QIRI_V96_IPHONE_PWA_PUBLIKO.yml'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: qiri-iphone-github-pages
+  cancel-in-progress: false
+
+jobs:
+  iphone:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Merr materialet ekzistuese
+        uses: actions/checkout@v4
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Mjetet per ikonat e iPhone
+        run: python -m pip install -q pillow
+      - name: Pergatit iPhone pa ndryshuar ilustrimet ose perkthimet
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip
+          unzip -tq QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, json, zipfile, base64, shutil, hashlib
+          from PIL import Image
+          from io import BytesIO
+
+          BASE = Path.cwd()
+          SRC = BASE/'QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip'
+          OUT = BASE/'public'
+          OUT.mkdir(parents=True,exist_ok=True)
+
+          js = r'''/* QIRI V96 - PWA iPhone audio Gemini with offline browser TTS fallback */
+          (function(){
+            'use strict';
+            const owner='memet2208-lang',repo='histori-legjenda-nen-qiri-android';
+            const raw='https://raw.githubusercontent.com/'+owner+'/'+repo+'/main/';
+            const catUrl=raw+'QIRI_PUBLIC_AUDIO_CATALOG.json';
+            let cat=null,catLast=0,loading=null;
+            function status(t){const e=document.getElementById('ttsState');if(e)e.textContent=t;}
+            async function loadCatalog(force){
+              if(!navigator.onLine)return cat;
+              const now=Date.now();
+              if(!force && cat && now-catLast<15*60*1000)return cat;
+              if(loading)return loading;
+              loading=(async()=>{
+                try{
+                  const r=await fetch(catUrl+'?v='+Math.floor(now/900000),{cache:'no-store',mode:'cors'});
+                  if(!r.ok)throw Error('HTTP '+r.status);
+                  const data=await r.json();
+                  if(data&&data.version>=1&&data.tracks&&typeof data.tracks==='object'){
+                    cat=data;catLast=Date.now();
+                  }
+                }catch(_){/* Existing text and offline book remain available. */}
+                finally{loading=null;}
+                return cat;
+              })();
+              return loading;
+            }
+            function files(lang,page){
+              const a=cat?.tracks?.[lang]?.[String(page)];
+              return Array.isArray(a)?a.filter(x=>typeof x==='string' && /^(sq|it|en|de|fr|es)\/[a-zA-Z0-9_.-]+\.mp3$/.test(x)):[];
+            }
+            const n=window.qiriBrowserNarration;
+            if(!n||!Array.isArray(ITEM_DATA)||ITEM_DATA.length!==219) return;
+            const original={start:n.start.bind(n),reopen:n.reopen.bind(n),pause:n.pause.bind(n),stop:n.stop.bind(n)};
+            const audio=document.createElement('audio');
+            audio.id='qiriIosNarration';audio.preload='none';audio.setAttribute('playsinline','');
+            audio.style.cssText='position:absolute;width:0;height:0;opacity:0;pointer-events:none';
+            document.body.appendChild(audio);
+            let mode='none',playlist=[],track=0,generation=0;
+            function button(playing){
+              const b=document.getElementById('v72Audio');
+              if(b){b.textContent=playing?'⏸':'🔊';b.setAttribute('aria-pressed',String(playing));}
+            }
+            function disconnectAudio(){
+              generation++;audio.pause();audio.removeAttribute('src');audio.load();
+              playlist=[];track=0;
+            }
+            function mediaSetup(){
+              if(!('mediaSession' in navigator))return;
+              try{
+                navigator.mediaSession.metadata=new MediaMetadata({
+                 title:ITEM_DATA[idx]?.title||'Histori dhe Legjenda nën Qiri',
+                 artist:'Histori dhe Legjenda nën Qiri',album:'219 dyfaqëshe · 6 gjuhë'
+                });
+                navigator.mediaSession.setActionHandler('play',()=>n.pause());
+                navigator.mediaSession.setActionHandler('pause',()=>n.pause());
+                navigator.mediaSession.setActionHandler('nexttrack',()=>next(1));
+                navigator.mediaSession.setActionHandler('previoustrack',()=>next(-1));
+              }catch(_){/* Safari support differs by iOS version. */}
+            }
+            function playClip(){
+              if(!n.playing||n.paused||mode!=='audio')return;
+              if(track>=playlist.length){
+                if(idx+1>=ITEM_DATA.length){n.stop();status('✓ Libri përfundoi');return;}
+                idx++;render();n.reopen();return;
+              }
+              const thisGeneration=generation;
+              audio.src=raw+'public_site/audio/'+playlist[track];
+              audio.playbackRate=Math.max(.75,Math.min(1.5,Number(document.getElementById('ttsSpeed')?.value)||1));
+              mediaSetup();
+              status('🎙️ Gemini · '+f30Lang+' · dyfaqja '+(idx+1)+'/219 · klipi '+(track+1)+'/'+playlist.length);
+              const playPromise=audio.play();
+              if(playPromise?.catch)playPromise.catch(e=>{
+                if(thisGeneration!==generation||mode!=='audio'||!n.playing)return;
+                // No autoplay permission/network on iPhone? Keep the text available;
+                // try system voice rather than reporting that Gemini exists but is unusable.
+                mode='speech';disconnectAudio();n.playing=true;n.paused=false;
+                status('Zëri online nuk u hap; po provoj zërin e iPhone…');
+                original.start();
+              });
+            }
+            audio.onended=()=>{if(mode==='audio'&&n.playing&&!n.paused){track++;playClip();}};
+            audio.onerror=()=>{
+              if(mode!=='audio'||!n.playing)return;
+              mode='speech';disconnectAudio();n.playing=true;n.paused=false;
+              status('Zëri natyral nuk është i arritshëm; po provoj zërin e iPhone…');
+              original.start();
+            };
+            function playForSpread(){
+              const lang=f30Lang;
+              const spread=idx+1;
+              const list=files(lang,spread);
+              if(!navigator.onLine||!list.length){
+                mode='speech';n.page=idx;
+                return original.start();
+              }
+              disconnectAudio();
+              mode='audio';playlist=list;track=0;
+              n.page=idx;n.__v85SpeechLang=lang;n.__v85NeedsRestart=false;
+              n.token++;n.playing=true;n.paused=false;
+              if('speechSynthesis' in window)window.speechSynthesis.cancel();
+              button(true);
+              playClip();
+            }
+            n.start=function(){
+              loadCatalog(false);
+              return playForSpread();
+            };
+            n.reopen=function(){
+              if(!this.playing)return;
+              if(mode==='audio'){
+                if(this.paused){this.__v85NeedsRestart=true;return;}
+                return playForSpread();
+              }
+              return original.reopen();
+            };
+            n.pause=function(){
+              if(mode!=='audio')return original.pause();
+              if(!this.playing)return;
+              if(this.paused){
+                this.paused=false;button(true);
+                const pending=audio.play();
+                if(pending?.catch)pending.catch(()=>{status('Shtyp Play për të vazhduar audion në iPhone');this.paused=true;button(false)});
+              }
+              else{this.paused=true;audio.pause();button(false);status('Ⅱ Në pauzë · Gemini');}
+            };
+            n.stop=function(){mode='none';disconnectAudio();button(false);return original.stop()};
+            // Do not interrupt the user or download recordings in the background:
+            // only update the small catalog; stream MP3 as each page is played.
+            loadCatalog(false);
+            document.addEventListener('visibilitychange',()=>{if(!document.hidden)loadCatalog(false)});
+            window.addEventListener('online',()=>loadCatalog(true));
+            setInterval(()=>loadCatalog(false),15*60*1000);
+            const speed=document.getElementById('ttsSpeed');if(speed)speed.addEventListener('change',()=>{
+              if(mode==='audio')audio.playbackRate=Math.max(.75,Math.min(1.5,Number(speed.value)||1));
+            });
+            if('serviceWorker' in navigator && location.protocol==='https:'){
+              window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{}));
+            }
+            window.QIRI_IPHONE={version:'V96',installedPWA:true,audioStreaming:true,refreshAudioCatalog:()=>loadCatalog(true),getAvailableSpreads:()=>Object.fromEntries(Object.entries(cat?.tracks||{}).map(([k,v])=>[k,Object.keys(v).length]))};
+          })();'''
+
+          sw = r'''/* Offline book and art; MP3 tracks remain online and update independently. */
+          const CACHE='qiri-v96-iphone-book-v1';
+          const CONTENT=['./','./index.html','./iphone-audio.js','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'];
+          self.addEventListener('install',event=>event.waitUntil((async()=>{
+           const cache=await caches.open(CACHE);
+           await Promise.all(CONTENT.map(p=>cache.add(new Request(p,{cache:'reload'})).catch(()=>{})));
+           await self.skipWaiting();
+          })()));
+          self.addEventListener('activate',event=>event.waitUntil((async()=>{
+           const keys=await caches.keys();await Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)));
+           await self.clients.claim();
+          })()));
+          self.addEventListener('fetch',event=>{
+           if(event.request.method!=='GET'||new URL(event.request.url).origin!==self.location.origin)return;
+           // MP3, audio catalogs and all non-shell resources are network-only.
+           if(!/(?:\/$|\/index\.html$|\/iphone-audio\.js$|\/manifest\.webmanifest$|\/icons\/icon-(?:192|512)\.png$)/.test(new URL(event.request.url).pathname))return;
+           event.respondWith((async()=>{
+            const cache=await caches.open(CACHE);
+            const hit=await cache.match(event.request);
+            if(hit)return hit;
+            const r=await fetch(event.request);if(r.ok)cache.put(event.request,r.clone());return r;
+           })());
+          });'''
+
+          with zipfile.ZipFile(SRC) as z:
+              html=z.read('app/src/main/assets/index.html').decode('utf-8')
+              ico=z.read('app/src/main/res/mipmap-xxxhdpi/ic_launcher.png')
+          assert html.count('const ITEM_DATA=')==1 and html.count('</body>')==1
+          # Never touch approved texts, serialized illustrations, or layout CSS.
+          assert 'window.QIRI_TRANSLATIONS=' in html and 'window.QIRI_V72_THUMBS=' in html
+          metadata='''<link rel="manifest" href="./manifest.webmanifest"><link rel="apple-touch-icon" href="./icons/icon-192.png"><meta name="theme-color" content="#100c0d"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Nën Qiri"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="mobile-web-app-capable" content="yes">'''
+          html=html.replace('</head>', metadata+'</head>',1).replace('</body>','<script src="./iphone-audio.js" defer></script></body>',1)
+          (OUT/'index.html').write_text(html,encoding='utf-8')
+          (OUT/'iphone-audio.js').write_text(js+'\n',encoding='utf-8')
+          (OUT/'sw.js').write_text(sw+'\n',encoding='utf-8')
+          manifest={"name":"Histori dhe Legjenda nën Qiri","short_name":"Nën Qiri","description":"Libër me 219 dyfaqëshe dhe gjashtë gjuhë. Regjistrimet Gemini online kur janë gati.","id":"./","start_url":"./index.html","scope":"./","display":"standalone","background_color":"#100c0d","theme_color":"#100c0d","orientation":"landscape","lang":"sq","icons":[{"src":"./icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any"},{"src":"./icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"}]}
+          (OUT/'manifest.webmanifest').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          (OUT/'icons').mkdir(exist_ok=True)
+          for size in (192,512):
+              image=Image.open(BytesIO(ico)).convert('RGB').resize((size,size),Image.Resampling.LANCZOS)
+              image.save(OUT/'icons'/f'icon-{size}.png',optimize=True)
+          (OUT/'README.txt').write_text('QIRI V96 · iPhone (PWA). Hap linkun ne Safari, Share → Add to Home Screen. Libri i plote me ilustrime + 6 gjuhe punon offline pas vizites se pare; regjistrimet natyrale vijne online sipas disponibilitetit. TTS i iPhone varet nga zerat qe mbeshteten nga iOS. Audio ne ekranin e kycur ne iPhone ka kufizime te Safari dhe nuk garantohet. Pa App Store, pa IPA.\n',encoding='utf-8')
+
+          print('PWA site ready, page bytes:',(OUT/'index.html').stat().st_size)
+          PY
+      - name: Verifiko 219 dyfaqeshe dhe 6 gjuhe
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s public/index.html
+          test -s public/iphone-audio.js
+          test -s public/manifest.webmanifest
+          test -s public/sw.js
+          node --check public/iphone-audio.js
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,zipfile,hashlib
+          with zipfile.ZipFile('QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip') as z:
+            d=json.loads(z.read('app/src/main/assets/book_texts.json'))
+            assert len(d['spreads'])==219
+            assert all(all(k in row for k in ('sq','it','en','de','fr','es')) for row in d['spreads'])
+            original=z.read('app/src/main/assets/index.html').decode('utf8')
+            page=Path('public/index.html').read_text(encoding='utf8')
+            inject_head='<link rel="manifest" href="./manifest.webmanifest">'
+            assert inject_head in page
+            assert original.startswith('<!doctype html>')
+            assert original.count('const ITEM_DATA=')==page.count('const ITEM_DATA=')==1
+            assert 'src="./iphone-audio.js"' in page
+          print('PASS: 219 dyfaqeshe, 6 gjuhe; ilustrimet dhe tekstet ekzistuese mbeten te pandryshuara.')
+          PY
+      - name: Konfiguro GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Pergatit publikimin
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - name: Publiko versionin iPhone
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Shfaq lidhjen e iPhone
+        shell: bash
+        run: |
+          echo "### iPhone: ${{ steps.deployment.outputs.page_url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Hape me Safari -> Share -> Add to Home Screen (Shto ne ekranin kryesor).' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Zerat Gemini merren gradualisht nga GitHub; libri punon offline pas instalimit te PWA.' >> "$GITHUB_STEP_SUMMARY"
