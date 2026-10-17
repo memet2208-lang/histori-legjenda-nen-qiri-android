@@ -1,0 +1,87 @@
+name: QIRI V100 - Integro 152 MP3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Merr projektin
+        uses: actions/checkout@v4
+
+      - name: Integro audion shqip
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          source = Path("audio_colab/sq")
+          dest = Path("public_site/audio/sq")
+          catalog_path = Path("QIRI_PUBLIC_AUDIO_CATALOG.json")
+
+          catalog = json.loads(
+              catalog_path.read_text(encoding="utf-8")
+          )
+
+          assert catalog["version"] == 1
+          assert catalog["tracks"].get("it")
+
+          dest.mkdir(parents=True, exist_ok=True)
+
+          for n in range(1, 153):
+              name = f"{n:03d}.mp3"
+              src = source / name
+
+              assert src.is_file(), f"Mungon {name}"
+              assert src.stat().st_size > 1000
+
+              shutil.copyfile(src, dest / name)
+
+          catalog["base_url"] = (
+              "https://raw.githubusercontent.com/"
+              "memet2208-lang/"
+              "histori-legjenda-nen-qiri-android/"
+              "main/public_site/audio"
+          )
+
+          sq = catalog["tracks"].setdefault("sq", {})
+
+          for n in range(1, 153):
+              sq[str(n)] = [f"sq/{n:03d}.mp3"]
+
+          catalog_path.write_text(
+              json.dumps(
+                  catalog,
+                  ensure_ascii=False,
+                  indent=2
+              ) + "\n",
+              encoding="utf-8"
+          )
+
+          print("152 MP3 shqip integruar.")
+          print("Audio V99 ruajtur.")
+          print("Katalogu V100 gati.")
+          PY
+
+      - name: Ruaj ndryshimet
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add QIRI_PUBLIC_AUDIO_CATALOG.json
+          git add public_site/audio/sq
+
+          if git diff --cached --quiet; then
+            echo "Asnje ndryshim."
+          else
+            git commit -m "QIRI V100 - Integro 152 MP3"
+            git push
+          fi
