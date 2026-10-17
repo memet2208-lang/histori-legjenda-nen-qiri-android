@@ -1,0 +1,104 @@
+name: QIRI - Nxirr MP3 nga ZIP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract-audio:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Shkarko projektin
+        uses: actions/checkout@v4
+
+      - name: Nxirr regjistrimet MP3
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          import re
+          import sys
+
+          destination = Path("audio_colab/sq")
+          destination.mkdir(parents=True, exist_ok=True)
+
+          packages = [
+              Path("audio_colab/QIRI_AUDIO_PJESA_02.zip"),
+              Path("audio_colab/QIRI_AUDIO_PJESA_03.zip"),
+              Path("audio_colab/sq/QIRI_AUDIO_PJESA_04.zip"),
+              Path("QIRI_AUDIO_PJESA_04.zip"),
+          ]
+
+          added = []
+          existing = []
+
+          for package in packages:
+              if not package.exists():
+                  print("Nuk u gjet:", package)
+                  continue
+
+              print("Duke hapur:", package)
+
+              with ZipFile(package) as archive:
+                  for item in archive.infolist():
+
+                      if item.is_dir():
+                          continue
+
+                      filename = Path(item.filename).name
+
+                      if not re.fullmatch(
+                          r"\d{3}\.mp3",
+                          filename,
+                          re.IGNORECASE
+                      ):
+                          continue
+
+                      target = destination / filename
+
+                      if target.exists():
+                          existing.append(filename)
+                          continue
+
+                      audio = archive.read(item)
+
+                      if not audio:
+                          sys.exit(
+                              "Regjistrim bosh: " + filename
+                          )
+
+                      target.write_bytes(audio)
+                      added.append(filename)
+
+          total = len(list(destination.glob("*.mp3")))
+
+          print("MP3 te reja:", len(added))
+          print("MP3 ekzistuese:", len(existing))
+          print("TOTAL MP3:", total)
+
+          if total < 152:
+              print(
+                  "KUJDES: Mungojne regjistrime. "
+                  "Kontrollo paketat ZIP."
+              )
+
+          PY
+
+      - name: Ruaj MP3 ne GitHub
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add audio_colab/sq/*.mp3
+
+          if git diff --cached --quiet; then
+            echo "Nuk ka regjistrime te reja."
+          else
+            git commit -m "QIRI - Integrimi i MP3 nga ZIP"
+            git push
+          fi
