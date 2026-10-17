@@ -1,0 +1,79 @@
+name: QIRI V100 - Kontrolli Android
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kontrollo:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Merr projektin
+        uses: actions/checkout@v4
+
+      - name: Kontrollo audion dhe Android
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          import re
+
+          root = Path("audio_colab/sq")
+          audio = sorted(root.glob("*.mp3"))
+
+          numbers = {
+              int(p.stem)
+              for p in audio
+              if re.fullmatch(r"\d{3}", p.stem)
+          }
+
+          missing = sorted(set(range(1, 153)) - numbers)
+
+          print("MP3 shqip:", len(audio))
+          print("Numrat qe mungojne:", missing)
+
+          assert not missing, "Mungojne MP3"
+
+          archive = Path(
+              "QIRI_V92_ANDROID_ZERA_PER_TE_GJITHE.zip"
+          )
+
+          assert archive.exists(), "Mungon projekti V92"
+
+          with ZipFile(archive) as z:
+              files = z.namelist()
+
+              targets = [
+                  "PublicAudio.java",
+                  "NarrationService.java",
+                  "book_texts.json",
+                  "index.html"
+              ]
+
+              for target in targets:
+                  found = [
+                      p for p in files
+                      if p.endswith("/" + target)
+                  ]
+
+                  print(target, ":", found)
+
+                  assert found, "Mungon " + target
+
+              for name in files:
+                  if name.endswith("PublicAudio.java"):
+                      source = z.read(name).decode("utf-8")
+                      print("\n=== PUBLIC AUDIO ===")
+                      print(source)
+
+                  if name.endswith("NarrationService.java"):
+                      source = z.read(name).decode("utf-8")
+                      print("\n=== NARRATION SERVICE ===")
+                      print(source)
+
+          print("\nKONTROLLI V100 PERFUNDOI")
+          PY
